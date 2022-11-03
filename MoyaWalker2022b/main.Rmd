@@ -1,0 +1,803 @@
+---
+title: "Martingale Posterior Distributions for Time Series Models"
+---
+
+This code generates figures for the article 
+*Martingale Posterior Distributions for Time Series Models*.
+
+Set image properties and load necessary libraries:
+
+```{r setup}
+knitr::opts_chunk$set(dev = 'png', fig.path = "images/", dpi = 300,
+                      fig.asp = .66, echo = TRUE)
+
+library(MARSS)
+library(foreach)
+library(doParallel)
+library(parallel)
+library(tidyverse)
+
+set.seed(8080)
+```
+
+Figure 1: Martingale posterior for transition matrix of a discrete hidden Markov
+model.
+
+```{r fig1-code}
+n <- 50
+N <- 1000
+M <- 1000
+s <- c(1, 2)
+x <- numeric(n)
+x[1] <- sample(s, 1)
+Q <- matrix(c(0.2, 0.6, 0.8, 0.4), nrow = 2)
+Qhat <- matrix(c(0, 0, 0, 0), nrow = 2)
+for (i in 2:n) {
+  x[i] <- sample(s, 1, prob = Q[x[i - 1], ])
+  Qhat[x[i - 1], x[i]] <- Qhat[x[i - 1], x[i]] + 1
+}
+Qpost <- array(NA, dim = c(M, 2, 2))
+for (j in 1:M) {
+  QQ <- Qhat
+  xx <- numeric(N + 1)
+  xx[1] <- x[n]
+  for (i in 2:(N + 1)) {
+    xx[i] <- sample(s, 1, prob = QQ[xx[i - 1], ])
+    QQ[xx[i - 1], xx[i]] <- QQ[xx[i - 1], xx[i]] + 1
+  }
+  for (ss in s) {
+    QQ[ss, ] <- QQ[ss, ] / sum(QQ[ss, ])
+  }
+  Qpost[j, , ] <- QQ
+}
+for (ss in s) {
+  Qhat[ss, ] <- Qhat[ss, ] / sum(Qhat[ss, ])
+}
+Qhat
+apply(Qpost, 2:3, mean)
+```
+
+```{r fig1-plot}
+(tibble(`P(1 -> 1)` = Qpost[, 1, 1], `P(2 -> 2)` = Qpost[, 2, 2]) %>% 
+  ggplot(aes(x = `P(1 -> 1)`, y = `P(2 -> 2)`)) +
+  geom_point(color = 'grey50') +
+  geom_vline(xintercept = Qhat[1, 1], linetype = 'dashed') +
+  geom_hline(yintercept = Qhat[2, 2], linetype = 'dashed') +
+  geom_point(x = Q[1, 1], y = Q[2, 2], shape = 4, size = 3, color = 'red') +
+  theme_bw()) %>% 
+  ggExtra::ggMarginal()
+```
+
+Figure 2: Comparison of Bayesian and Martingale posteriors for autoregressive 
+time series.
+
+```{r fig2-code}
+n <- 20
+N <- 500
+M <- 1000
+theta <- 0.6
+sig <- 1
+
+x <- numeric(n)
+for (i in 2:n) {
+  x[i] <- theta * x[i - 1] + rnorm(1, sd = sqrt(sig))
+}
+thhat <- sum(x[2:n] * x[1:(n - 1)]) / sum(x[1:(n - 1)] ^ 2)
+
+thpost <- numeric(M)
+for (j in 1:M) {
+  th <- thhat
+  sm <- sum(x[1:(n - 1)] ^ 2)
+  xx <- c(x, numeric(N))
+  for (i in 1:N) {
+    xx[n + i] <- th * xx[n + i - 1] + rnorm(1, sd = sqrt(sig))
+    th <- (xx[n + i] * xx[n + i - 1] + sm * th) / (sm + xx[n + i - 1] ^ 2)
+    sm <- sm + xx[n + i - 1] ^ 2
+  }
+  thpost[j] <- th
+}
+```
+
+```{r fig2-plot}
+ggplot(data = tibble(Theta = thpost), aes(x = Theta)) + 
+  geom_histogram(aes(y = ..density..), bins = 20, color = 'black', fill = NA) +
+  geom_function(fun = dnorm,
+                args = list(mean = thhat,
+                            sd = sqrt(sig / sum(x[1:(n - 1)] ^ 2))),
+                linetype = 'dashed',
+                color = 'red') +
+  ylab('Density') +
+  theme_bw()
+```
+
+Figure 3: Martingale posterior for a Poisson autoregressive model
+
+```{r fig3-code}
+n <- 20
+N <- 500
+M <- 1000
+theta <- 1.5
+r <- 1
+x <- numeric(n)
+x[1] <- rgamma(1, theta, 1)
+for (i in 2:n) {
+  x[i] <- rgamma(1, theta + rpois(1, r * x[i - 1]), 1 + r)
+}
+thhat <- mean(x)
+thpost <- numeric(M)
+for (j in 1:M) {
+  th <- thhat
+  xx <- c(x, numeric(N))
+  for (i in 1:N) {
+    xx[n + i] <- rgamma(1, th + rpois(1, r * xx[n + i - 1]), 1 + r)
+    th <- ((n + i - 1) * th + xx[n + i]) / (n + i)
+  }
+  thpost[j] <- th
+}
+```
+
+```{r fig3-plot}
+ggplot(data = tibble(Theta = thpost), aes(x = Theta)) + 
+  geom_histogram(aes(y = ..density..), bins = 20, color = 'black', fill = NA) +
+  geom_vline(xintercept = thhat, linetype = 'dashed') +
+  geom_vline(xintercept = theta, linetype = 'dashed', color = 'red') +
+  ylab('Density') +
+  theme_bw()
+```
+
+Figure 4: Gradient ascent posterior for an ARCH model.
+
+```{r fig4-code}
+
+```
+
+```{r fig4-plot}
+
+```
+
+Load in `graywhales` data, minor preprocessing, set forecast parameters, fit 
+initial model.
+
+```{r load-in}
+data(graywhales)
+
+clrs <- c(mle = '#882255', mrtn = '#44AA99', bays = '#332288',
+          bays1 = '#88CCEE', bays2 = '#117733', boot = '#CC6677')
+
+years_ <- graywhales[,1]
+years <- seq(min(years_), max(years_))
+loggraywhales <- rep(NA, length(years))
+loggraywhales[years %in% years_] <- log(graywhales[,2])
+
+n <- length(loggraywhales)
+Hzn <- 25
+N <- 500
+M <- 100 * detectCores()
+
+kem <- MARSS(loggraywhales)
+```
+
+Generate a forecast from the initial model.
+
+Figure 5: Initial MARSS model fit.
+
+```{r model0, cache = TRUE}
+cl <- makeCluster(detectCores(), type = 'PSOCK')
+clusterExport(cl, c('MARSS'))
+registerDoParallel(cl)
+
+fcst0 <- foreach (m = 1:M) %dopar% {
+    synthx <- numeric(Hzn)
+    synthy <- numeric(Hzn)
+    mod <- kem
+    xn <- predict(mod, n.ahead = 0, type = 'xtT')$pred[n, 'estimate']
+    return(xn + cumsum(rnorm(Hzn, coef(mod)$U, sqrt(coef(mod)$Q))))
+}
+
+stopCluster(cl)
+```
+
+```{r model0-plot}
+fcst_mod0 <- tibble(Year = rep(1951 + 1:n, M),
+                 LogCount = rep(predict(kem, type = 'xtT')$pred$estimate[1:n],
+                                M),
+                 Data = rep(loggraywhales, M),
+                 synth = rep(1:M, each = length(loggraywhales)))
+fcst_mod1 <- tibble(Year = 1951 + n + rep(1:Hzn, M),
+                    LogCount = unlist(fcst0),
+                    Data = NA,
+                    synth = rep(1:M, each = Hzn))
+mod0_plot <- fcst_mod0 %>% 
+    ggplot(aes(x = Year, y = LogCount, group = synth)) +
+    geom_line(size = 0.5, alpha = 0.2) +
+    geom_point(aes(y = Data), color = 'white', size = 2) +
+    geom_point(aes(y = Data), color = 'black') +
+    theme_bw() +
+    theme(legend.position = 'none')
+mod0_plot
+```
+
+Obtain Martingale posterior from MARSS model.
+
+```{r, cache = TRUE}
+comb1 <- function(out1, out2) {
+  mods <- append(out1[[4]], out2[[4]])
+  synthy <- cbind(out1[[3]], out2[[3]])
+  synthx <- cbind(out1[[2]], out2[[2]])
+  pred <- cbind(out1[[1]], out2[[1]])
+  coef_seq <- cbind(out1[5], out2[5])
+
+  return(list(pred = pred, synthx = synthx, synthy = synthy, mods = mods,
+              coef_seq = coef_seq))
+}
+
+
+cl <- makeCluster(detectCores(), type = 'PSOCK')
+clusterExport(cl, c('MARSS'))
+registerDoParallel(cl)
+
+t <- (res <- foreach (m = 1:M,
+                      .combine = 'comb1') %dopar% {
+  synthx <- numeric(N)
+  synthy <- numeric(N)
+  coef_seq <- list()
+  xn <- predict(kem, n.ahead = 0, type = 'xtT')$pred[length(loggraywhales),
+                                                     'estimate']
+  for (n in 1:N) {
+    if (n == 1) {
+      mod <- kem
+    } else {
+      mod <- MARSS(c(loggraywhales, synthy[1:(n - 1)]),
+                   inits = coef(mod),
+                   silent = TRUE,
+                   control = list(minit = 1,
+                                  min.iter.conv.test = 1))
+    }
+    xn <- xn + coef(mod)$U + rnorm(1, 0, sqrt(coef(mod)$Q))
+    synthx[n] <- xn
+    synthy[n] <- synthx[n] + rnorm(1, 0, sqrt(coef(mod)$R))
+    coef_seq[[n]] <- as.numeric(coef(mod)[c('U', 'x0', 'R', 'Q')])
+  }
+  prd <- predict(mod, n.ahead = 1, type = 'xtT')
+  pred <- prd$pred$estimate
+  return(list(pred, synthx, synthy, list(mod), coef_seq))
+}) %>% system.time()
+
+stopCluster(cl)
+
+print(t)
+```
+
+Some figures showing the synthetic data...
+
+```{r}
+df_y0 <- tibble(Year = 1951 + 1:n,
+                LogCount = loggraywhales,
+                synth = 0)
+df_y <- tibble(Year = 1951 + n + rep(1:N, M),
+               LogCount = as.numeric(res$synthy),
+               synth = rep(1:M, each = N))
+```
+
+```{r}
+df_y0 %>%
+  rbind(df_y) %>%
+  ggplot(aes(x = Year, y = LogCount, group = synth)) +
+  geom_point(data = df_y0) +
+  geom_line(data = df_y, size = 0.5, alpha = 0.2) +
+  theme_bw() +
+  theme(legend.position = 'none')
+```
+
+```{r}
+df_x0 <- tibble(Year = rep(1951 + 1:n, M),
+                LogCount = rep(predict(kem, type = 'xtT')$pred$estimate, M),
+                synth = rep(1:M, each = n))
+df_xt <- tibble(Year = 1951 + n + rep(1:N, M),
+                LogCount = as.numeric(res$synthx),
+                synth = rep(1:M, each = N))
+df_x <- tibble(Year = 1951 + rep(1:(n + N), M),
+               LogCount = as.numeric(res$pred),
+               synth = rep(1:M, each = n + N))
+```
+
+```{r x_synth}
+df_x0 %>%
+  rbind(df_xt) %>%
+  ggplot(aes(x = Year, y = LogCount, group = synth)) +
+  geom_point(data = df_y0, color = 'white', size = 2) +
+  geom_point(data = df_y0, color = 'black') +
+  geom_point(data = df_y, color = 'white', size = 2, alpha = 0.1) +
+  geom_point(data = df_y, color = 'black', alpha = 0.1) +
+  geom_line(size = 0.5, alpha = 0.5) +
+  theme_bw() +
+  theme(legend.position = 'none')
+```
+
+```{r x_smooth}
+df_x %>%
+  ggplot(aes(x = Year, y = LogCount, group = synth)) +
+  geom_point(data = df_y0) +
+  geom_point(data = df_y, alpha = 0.1) +
+  geom_line(size = 0.5, alpha = 0.5) +
+  theme_bw() +
+  theme(legend.position = 'none')
+```
+
+Figure 6: Trace plots.
+
+```{r}
+# Coefficient convergence
+arr <- array(unlist(res$coef_seq), dim = c(4, N, M))
+df_theta <- tibble(Iteration = rep(1:N, M),
+                   Chain = rep(1:M, each = N),
+                   u = arr[1, , ] %>% as.numeric,
+                   x0 = arr[2, , ] %>% as.numeric,
+                   r = arr[3, , ] %>% as.numeric,
+                   q = arr[4, , ] %>% as.numeric)
+```
+
+```{r trace_u}
+(df_theta %>%
+    ggplot(aes(x = Iteration, y = u, group = Chain)) +
+    geom_line(alpha = 0.2) +
+    geom_hline(yintercept = coef(kem)$U, size = 1, color = clrs[['mle']]) +
+    theme_bw() +
+    geom_point(data = subset(df_theta, Iteration == N), alpha = 0)) %>%
+  ggExtra::ggMarginal(margins = 'y')
+```
+
+```{r trace_x0}
+(df_theta %>%
+    ggplot(aes(x = Iteration, y = x0, group = Chain)) +
+    geom_line(alpha = 0.2) +
+    geom_hline(yintercept = coef(kem)$x0, size = 1, color = clrs[['mle']]) +
+    theme_bw() +
+    geom_point(data = subset(df_theta, Iteration == N), alpha = 0)) %>%
+  ggExtra::ggMarginal(margins = 'y')
+```
+
+```{r trace_r}
+(df_theta %>%
+    ggplot(aes(x = Iteration, y = r, group = Chain)) +
+    geom_line(alpha = 0.2) +
+    geom_hline(yintercept = coef(kem)$R, size = 1, color = clrs[['mle']]) +
+    theme_bw() +
+    geom_point(data = subset(df_theta, Iteration == N), alpha = 0)) %>%
+  ggExtra::ggMarginal(margins = 'y')
+```
+
+```{r trace_q}
+(df_theta %>%
+    ggplot(aes(x = Iteration, y = q, group = Chain)) +
+    geom_line(alpha = 0.2) +
+    geom_hline(yintercept = coef(kem)$Q, size = 1, color = clrs[['mle']]) +
+    theme_bw() +
+    geom_point(data = subset(df_theta, Iteration == N), alpha = 0)) %>%
+  ggExtra::ggMarginal(margins = 'y')
+```
+
+Pair plot for Martingale posterior.
+
+```{r corrplot, fig.asp = 1}
+df_theta %>%
+  subset(Iteration == N) %>%
+  select(c('u', 'x0', 'r', 'q')) %>%
+  GGally::ggpairs() +
+  theme_bw()
+```
+
+Obtain martingale forecast, optional figure.
+
+```{r, cache = TRUE}
+comb2 <- function(out1, out2) {
+  synthy <- cbind(out1[[3]], out2[[3]])
+  synthx <- cbind(out1[[2]], out2[[2]])
+  pred <- cbind(out1[[1]], out2[[1]])
+
+  return(list(pred = pred, synthx = synthx, synthy = synthy))
+}
+
+cl <- makeCluster(detectCores(), type = 'PSOCK')
+clusterExport(cl, c('MARSS'))
+registerDoParallel(cl)
+
+fcst <- foreach (m = 1:M,
+                 .combine = 'comb2') %dopar% {
+    mod <- res$mods[[m]]
+    xn <- predict(mod, n.ahead = 0, type = 'xtT')$pred[n, 'estimate']
+    synthx <- xn + cumsum(rnorm(Hzn, coef(mod)$U, sqrt(coef(mod)$Q)))
+    synthy <- rnorm(Hzn, synthx, sqrt(coef(mod)$R))
+    prd <- predict(mod, n.ahead = 1, type = 'xtT')
+    pred <- prd$pred$estimate
+    return(list(pred, synthx, synthy))
+  }
+
+stopCluster(cl)
+```
+
+```{r}
+fcst_x0 <- tibble(Year = rep(1951 + 1:n, M),
+                 LogCount = as.numeric(sapply(1:M, function(m) 
+                   predict(res$mods[[m]], type = 'xtT')$pred$estimate[1:n])),
+                 synth = rep(1:M, each = n))
+fcst_xt <- tibble(Year = 1951 + n + rep(1:Hzn, M),
+                  LogCount = as.numeric(fcst$synthx),
+                  synth = rep(1:M, each = Hzn))
+```
+
+```{r fcst}
+fcst_plot <- fcst_x0 %>%
+    rbind(fcst_xt) %>%
+    ggplot(aes(x = Year, y = LogCount, group = synth)) +
+    geom_line(size = 0.5, alpha = 0.2) +
+    # geom_point(data = df_y0) +
+    # geom_point(data = df_y, alpha = 0.1) +
+    # geom_point(data = subset(fcst_xt, Year == max(Year)), alpha = 0) +
+    geom_point(data = tibble(Year = 1951 + 1:n, LogCount = loggraywhales, 
+                             synth = NA),
+               color = 'white', size = 2) +
+    geom_point(data = tibble(Year = 1951 + 1:n, LogCount = loggraywhales, 
+                             synth = NA),
+               color = 'black') +
+    theme_bw() +
+    theme(legend.position = 'none')
+fcst_plot
+```
+
+Obtain parametric bootstrap results.
+
+```{r, cache = TRUE}
+cl <- makeCluster(detectCores(), type = 'PSOCK')
+clusterExport(cl, c('MARSS'))
+registerDoParallel(cl)
+
+res_pboot <- foreach (m = 1:M,
+                      .combine = 'comb1') %dopar% {
+  synthx <- numeric(length(loggraywhales))
+  synthy <- numeric(length(loggraywhales))
+  coef_seq <- list()
+  synthx <- coef(kem)$x0 + cumsum(rnorm(n,
+                                        coef(kem)$U,
+                                        sqrt(coef(kem)$Q)))
+  synthy <- rnorm(n, synthx, sqrt(coef(kem)$R))
+  synthy[is.na(loggraywhales)] <- NA
+  mod <- MARSS(synthy,
+               inits = coef(kem),
+               silent = TRUE)
+  coef_seq[[1]] <- as.numeric(coef(mod)[c('U', 'x0', 'R', 'Q')])
+  prd <- predict(mod, n.ahead = 1, type = 'xtT')
+  pred <- prd$pred$estimate
+  return(list(pred, synthx, synthy, list(mod), coef_seq))
+}
+
+stopCluster(cl)
+```
+```{r pboot-plot}
+arr_pboot <- array(unlist(res_pboot$coef_seq), dim = c(4, M))
+df_thpboot <- tibble(Chain = 1:M,
+                     u = arr_pboot[1, ] %>% as.numeric,
+                     x0 = arr_pboot[2, ] %>% as.numeric,
+                     r = arr_pboot[3, ] %>% as.numeric,
+                     q = arr_pboot[4, ] %>% as.numeric)
+df_thpboot %>%
+    select(c('u', 'x0', 'r', 'q')) %>%
+    GGally::ggpairs() +
+    theme_bw()
+```
+
+Figure 7: Forecast Comparison.
+
+```{r fcst_compare}
+rbind(fcst_mod1 %>% 
+        filter(Year == max(Year)) %>% 
+        select(LogCount) %>% 
+        mutate(Method = '\U03B8 fixed at MLE'),
+      fcst_xt %>% 
+        filter(Year == max(Year)) %>% 
+        select(LogCount) %>% 
+        mutate(Method = '\U03B8 recurisvely updated')) %>% 
+  ggplot(aes(x = LogCount, fill = Method)) +
+  xlab(paste('Forecasted LogCount in', 1997 + Hzn)) +
+  geom_density(color = NA, alpha = 0.7) +
+  geom_vline(xintercept = predict(kem, type = 'xtT',
+                                  n.ahead = Hzn)$pred[length(loggraywhales) + Hzn, 'estimate'],
+             color = clrs[['mle']]) +
+  geom_vline(xintercept = log(16650),
+             color = 'black') +
+  scale_fill_manual(values = c(clrs[['mle']], clrs[['mrtn']])) +
+  ylab('Density') +
+  theme_bw()
+```
+
+Obtain Bayesian results.
+
+```{r stan}
+scode <- "
+data {
+  int<lower=0> TT; // length of ts
+  int<lower=0> N; // num of ts; rows of y
+  int<lower=0> n_pos; // number of non-NA values in y
+  int<lower=0> col_indx_pos[n_pos]; // col index of non-NA vals
+  int<lower=0> row_indx_pos[n_pos]; // row index of non-NA vals
+  vector[n_pos] y;
+}
+parameters {
+  vector[N] x0; // initial states
+  real u;
+  vector[N] pro_dev[TT]; // refed as pro_dev[TT,N]
+  real<lower=0> sd_q;
+  real<lower=0> sd_r[N]; // obs variances are different
+}
+transformed parameters {
+  vector[N] x[TT]; // refed as x[TT,N]
+  for(i in 1:N){
+    x[1,i] = x0[i] + u + pro_dev[1,i];
+    for(t in 2:TT) {
+      x[t,i] = x[t-1,i] + u + pro_dev[t,i];
+    }
+  }
+}
+model {
+  sd_q ~ cauchy(0,5);
+  for(i in 1:N){
+    x0[i] ~ normal(y[i], 10); // assume no missing y[1]
+    sd_r[i] ~ cauchy(0,5);
+    for(t in 1:TT){
+    pro_dev[t,i] ~ normal(0, sd_q);
+    }
+  }
+  u ~ normal(0,2);
+  for(i in 1:n_pos){
+    y[i] ~ normal(x[col_indx_pos[i], row_indx_pos[i]], sd_r[row_indx_pos[i]]);
+  }
+}
+generated quantities {
+  vector[n_pos] log_lik;
+  for (n in 1:n_pos) log_lik[n] = normal_lpdf(y[n] | x[col_indx_pos[n], row_indx_pos[n]], sd_r[row_indx_pos[n]]);
+}
+"
+Y <- t(matrix(loggraywhales))
+ypos <- Y[!is.na(Y)]
+n_pos <- length(ypos)  # number on non-NA ys
+indx_pos <- which(!is.na(Y), arr.ind = TRUE)  # index on the non-NAs
+col_indx_pos <- as.vector(indx_pos[, "col"])
+row_indx_pos <- as.vector(indx_pos[, "row"])
+mod <- rstan::stan(
+  model_code = scode,
+  data = list(
+    y = ypos,
+    TT = ncol(Y),
+    N = nrow(Y),
+    n_pos = n_pos,
+    col_indx_pos = col_indx_pos,
+    row_indx_pos = row_indx_pos
+  ),
+  pars = c("sd_q", "x", "sd_r", "u", "x0"),
+  chains = 3,
+  iter = 4000,
+  thin = 1
+)
+```
+
+```{r}
+pars <- rstan::extract(mod)
+df_thetastan <- tibble(Iteration = 1:6000,
+                       u = pars$u %>% as.numeric,
+                       x0 = pars$x0 %>% as.numeric,
+                       r = pars$sd_r %>% as.numeric,
+                       q = pars$sd_q %>% as.numeric)
+df_theta$mode <- 'Martingale'
+df_thetastan$mode <- 'Bayesian'
+df_thetastan$r <- df_thetastan$r ^ 2
+df_thetastan$q <- df_thetastan$q ^ 2
+```
+
+Figure 8: Pairplot for Bayes, Bootstrap, and Martingale results.
+
+```{r corrplot2, fig.asp = 1}
+p_names <- c('u', 'x0', 'r', 'q')
+pairs <- rbind(df_thetastan[sample(2000:6000, M), ] %>%
+        select(c(p_names, 'mode')),
+      df_thpboot %>%
+        mutate(mode = 'Bootstrap') %>%
+        select(c(p_names, 'mode')),
+      df_theta %>%
+        subset(Iteration == N) %>%
+        select(c(p_names, 'mode'))) %>%
+  GGally::ggpairs(columns = 1:4, aes(color = mode),
+                  diag = list(continuous = GGally::wrap('densityDiag',
+                                                        alpha = 0.7,
+                                                        color = NA)),
+                  lower = list(continuous = GGally::wrap('points',
+                                                         alpha = 0.2,
+                                                         shape = 18)),
+                  upper = list(continuous = GGally::wrap('cor'))) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+th_mle <- as.numeric(coef(kem)[c('U', 'x0', 'R', 'Q')])
+for(i in 1:pairs$nrow) {
+  for(j in 1:pairs$ncol){
+    if (i == j) {
+      pairs[i,j] <- pairs[i,j] +
+        geom_vline(xintercept = mean(df_thetastan[, p_names[i]][[1]]), 
+                  color = clrs[['bays']], alpha = 0.5) +
+        geom_vline(xintercept = mean(df_thpboot[, p_names[i]][[1]]), 
+                  color = clrs[['boot']], alpha = 0.5) +
+        geom_vline(xintercept = mean(df_theta[df_theta$Iteration == N,
+                                              p_names[i]][[1]]), 
+                  color = clrs[['mrtn']], alpha = 0.5) +
+        geom_vline(xintercept = th_mle[i], color = clrs[['mle']])
+    }
+        pairs[i,j] <- pairs[i,j] + 
+          scale_fill_manual(values = c(clrs[['bays']], clrs[['boot']],
+                                       clrs[['mrtn']]))
+        pairs[i,j] <- pairs[i,j] + 
+          scale_color_manual(values = c(clrs[['bays']], clrs[['boot']],
+                                        clrs[['mrtn']]))
+  }
+}
+pairs
+```
+
+Obtain some other Bayesian results.
+
+```{r}
+scode_ <- "
+data {
+  int<lower=0> TT; // length of ts
+  int<lower=0> N; // num of ts; rows of y
+  int<lower=0> n_pos; // number of non-NA values in y
+  int<lower=0> col_indx_pos[n_pos]; // col index of non-NA vals
+  int<lower=0> row_indx_pos[n_pos]; // row index of non-NA vals
+  vector[n_pos] y;
+}
+parameters {
+  vector[N] x0; // initial states
+  real u;
+  vector[N] pro_dev[TT]; // refed as pro_dev[TT,N]
+  real<lower=0> sd_q;
+  real<lower=0> sd_r[N]; // obs variances are different
+}
+transformed parameters {
+  vector[N] x[TT]; // refed as x[TT,N]
+  for(i in 1:N){
+    x[1,i] = x0[i] + u + pro_dev[1,i];
+    for(t in 2:TT) {
+      x[t,i] = x[t-1,i] + u + pro_dev[t,i];
+    }
+  }
+}
+model {
+  sd_q ~ cauchy(0,5);
+  for(i in 1:N){
+"
+scode1 <- "
+    x0[i] ~ cauchy(y[i], 10); // assume no missing y[1]
+"
+scode2 <- "
+    x0[i] ~ normal(y[i], sqrt(sd_q ^ 2 + sd_r[i] ^ 2)); // assume no missing y[1]
+"
+scode__ <- "
+    sd_r[i] ~ cauchy(0,5);
+    for(t in 1:TT){
+    pro_dev[t,i] ~ normal(0, sd_q);
+    }
+  }
+  u ~ normal(0,2);
+  for(i in 1:n_pos){
+    y[i] ~ normal(x[col_indx_pos[i], row_indx_pos[i]], sd_r[row_indx_pos[i]]);
+  }
+}
+generated quantities {
+  vector[n_pos] log_lik;
+  for (n in 1:n_pos) log_lik[n] = normal_lpdf(y[n] | x[col_indx_pos[n], row_indx_pos[n]], sd_r[row_indx_pos[n]]);
+}
+"
+Y <- t(matrix(loggraywhales))
+ypos <- Y[!is.na(Y)]
+n_pos <- length(ypos)  # number on non-NA ys
+indx_pos <- which(!is.na(Y), arr.ind = TRUE)  # index on the non-NAs
+col_indx_pos <- as.vector(indx_pos[, "col"])
+row_indx_pos <- as.vector(indx_pos[, "row"])
+mod1 <-
+  rstan::stan(
+    model_code = paste0(scode_, scode1, scode__),
+    data = list(
+      y = ypos,
+      TT = ncol(Y),
+      N = nrow(Y),
+      n_pos = n_pos,
+      col_indx_pos = col_indx_pos,
+      row_indx_pos = row_indx_pos
+    ),
+    pars = c("sd_q", "x", "sd_r", "u", "x0"),
+    chains = 3,
+    iter = 4000,
+    thin = 1
+  )
+mod2 <-
+  rstan::stan(
+    model_code = paste0(scode_, scode2, scode__),
+    data = list(
+      y = ypos,
+      TT = ncol(Y),
+      N = nrow(Y),
+      n_pos = n_pos,
+      col_indx_pos = col_indx_pos,
+      row_indx_pos = row_indx_pos
+    ),
+    pars = c("sd_q", "x", "sd_r", "u", "x0"),
+    chains = 3,
+    iter = 4000,
+    thin = 1
+  )
+```
+
+```{r}
+df_thetastan$mode <- 'Uninformed'
+pars <- rstan::extract(mod1)
+df_thetastan1 <- tibble(Iteration = 1:6000,
+                        u = pars$u %>% as.numeric,
+                        x0 = pars$x0 %>% as.numeric,
+                        r = pars$sd_r %>% as.numeric,
+                        q = pars$sd_q %>% as.numeric)
+df_thetastan1$mode <- 'Uninformed+'
+df_thetastan1$r <- df_thetastan1$r ^ 2
+df_thetastan1$q <- df_thetastan1$q ^ 2
+pars <- rstan::extract(mod2)
+df_thetastan2 <- tibble(Iteration = 1:6000,
+                        u = pars$u %>% as.numeric,
+                        x0 = pars$x0 %>% as.numeric,
+                        r = pars$sd_r %>% as.numeric,
+                        q = pars$sd_q %>% as.numeric)
+df_thetastan2$mode <- 'Hierarchical'
+df_thetastan2$r <- df_thetastan2$r ^ 2
+df_thetastan2$q <- df_thetastan2$q ^ 2
+```
+
+Figure 9: Pair plot for three Bayesian priors.
+
+```{r, fig.asp = 1}
+pairs <- rbind(df_thetastan1[sample(2000:6000, M), ] %>%
+               select(c('u', 'x0', 'r', 'q', 'mode')),
+               df_thetastan[sample(2000:6000, M), ] %>%
+               select(c('u', 'x0', 'r', 'q', 'mode')),
+               df_thetastan2[sample(2000:6000, M), ] %>%
+               select(c('u', 'x0', 'r', 'q', 'mode'))
+               ) %>%
+  GGally::ggpairs(columns = 1:4, aes(color = mode),
+                  diag = list(continuous = GGally::wrap('densityDiag',
+                                                        alpha = 0.7,
+                                                        color = NA)),
+                  lower = list(continuous = GGally::wrap('points',
+                                                         alpha = 0.2,
+                                                         shape = 18)),
+                  upper = list(continuous = GGally::wrap('cor'))) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+th_mle <- as.numeric(coef(kem)[c('U', 'x0', 'R', 'Q')])
+for(i in 1:pairs$nrow) {
+  for(j in 1:pairs$ncol){
+    if (i == j) {
+      pairs[i,j] <- pairs[i,j] +
+        geom_vline(xintercept = mean(df_thetastan[, p_names[i]][[1]]), 
+                  color = clrs[['bays']], alpha = 0.5) +
+        geom_vline(xintercept = mean(df_thetastan1[, p_names[i]][[1]]), 
+                  color = clrs[['bays1']], alpha = 0.5) +
+        geom_vline(xintercept = mean(df_thetastan2[, p_names[i]][[1]]), 
+                  color = clrs[['bays2']], alpha = 0.5) +
+        geom_vline(xintercept = th_mle[i], color = clrs[['mle']])
+    }
+        pairs[i,j] <- pairs[i,j] + 
+          scale_fill_manual(values = c(clrs[['bays2']], clrs[['bays']],
+                                       clrs[['bays1']]))
+        pairs[i,j] <- pairs[i,j] + 
+          scale_color_manual(values = c(clrs[['bays2']], clrs[['bays']],
+                                        clrs[['bays1']]))
+  }
+}
+pairs
+```
